@@ -16,112 +16,115 @@ import pandas as pd
 
 class ASRTrainer(BaseTrainer):
     """
-    ASR (Automatic Speech Recognition) Trainer class that handles:
-    1. Training loop with gradient accumulation, mixed precision training, optional CTC
+    ASR (Automatic Speech Recognition) Trainer class that handles training, validation, and recognition loops.
+
+    This trainer implements:
+    1. Training loop with gradient accumulation, mixed precision training, and optional CTC loss
     2. Validation loop for model evaluation
-    3. Recognition loops for different decoding strategies
-    4. Language model shallow fusion
+    3. Recognition capabilities with different decoding strategies (greedy, beam search)
+    4. Language model shallow fusion during recognition
 
-    Implementation tasks are labeled in the docstring.
+    Implementation Tasks:
+    - TODO: Initialize CE and CTC loss in __init__
+    - TODO: Implement key parts of the training loop in _train_epoch
+    - TODO: Implement recognition functionality in recognize
+    - TODO: Implement key parts of the validation loop in _validate_epoch
+    - TODO: Implement key parts of the full training loop in train
+
+    Implementation Notes:
+    1. For __init__:
+        - Initialize CrossEntropyLoss with appropriate padding index and label smoothing
+        - Initialize CTCLoss if ctc_weight > 0
+
+    2. For _train_epoch:
+        - Unpack the batch (features, shifted targets, golden targets, lengths)
+        - Get model predictions, attention weights and CTC inputs
+        - Calculate CE loss and CTC loss if enabled
+        - Backpropagate the loss
+
+    3. For _validate_epoch:
+        - Use recognize() to generate transcriptions
+        - Extract references and hypotheses from recognition results
+
+    4. For train:
+        - Set maximum transcript length
+        - Implement epoch loop with training and validation
+
+    5. For recognize:
+        - Run inference
+        - Handle both greedy and optionally beam search decoding
     """
-
     def __init__(self, model, tokenizer, config, run_name, config_file, device=None):
         super().__init__(model, tokenizer, config, run_name, config_file, device)
 
-        # 1) Initialize cross-entropy loss
-        pad_id = self.tokenizer.pad_id
-        label_smoothing = self.config['loss'].get('label_smoothing', 0.0)
-        self.ce_criterion = nn.CrossEntropyLoss(
-            ignore_index=pad_id,
-            label_smoothing=label_smoothing
-        )
+        # TODO: Implement the __init__ method
 
-        # 2) Optional CTC loss
-        self.ctc_weight = self.config['loss'].get('ctc_weight', 0.0)
+        # TODO: Initialize CE loss
+        # How would you set the ignore_index?
+        # Use value in config to set the label_smoothing argument
+        self.ce_criterion = NotImplementedError
+
+        # TODO: Initialize CTC loss if needed
+        # You can use the pad token id as the blank index
         self.ctc_criterion = None
+        self.ctc_weight = self.config['loss'].get('ctc_weight', 0.0)
         if self.ctc_weight > 0:
-            # We'll use pad_id for blank as per instructions
             self.ctc_criterion = nn.CTCLoss(
-                blank=pad_id,
+                blank=self.tokenizer.pad_id,
                 zero_infinity=True
             )
+
+        raise NotImplementedError # Remove once implemented
+
 
     def _train_epoch(self, dataloader):
         """
         Train for one epoch.
 
+        Args:
+            dataloader: DataLoader for training data
         Returns:
-            metrics, last_batch_attn
+            Tuple[Dict[str, float], Dict[str, torch.Tensor]]: Training metrics and attention weights
         """
+        # TODO: In-fill the _train_epoch method
+        raise NotImplementedError # Remove once implemented
+
+        # Initialize training variables
         self.model.train()
         batch_bar = tqdm(total=len(dataloader), dynamic_ncols=True, leave=False, position=0, desc="[Training ASR]")
-
         running_ce_loss = 0.0
         running_ctc_loss = 0.0
         running_joint_loss = 0.0
         total_tokens = 0
+        running_att = None  # Initialize running_att here
 
-        last_batch_attn = {}
-
-        # Clear gradients initially
+        # Only zero gradients when starting a new accumulation cycle
         self.optimizer.zero_grad()
 
         for i, batch in enumerate(dataloader):
+            # TODO: Unpack batch and move to device
             feats, targets_shifted, targets_golden, feat_lengths, transcript_lengths = batch
 
-            # Move to device
-            feats = feats.to(self.device)
-            feat_lengths = feat_lengths.to(self.device)
-            # SHIFTED/GOLDEN can be None for test set, but we are training => should not be None
-            targets_shifted = targets_shifted.to(self.device) if targets_shifted is not None else None
-            targets_golden = targets_golden.to(self.device) if targets_golden is not None else None
-            transcript_lengths = transcript_lengths.to(self.device) if transcript_lengths is not None else None
+            with torch.autocast(device_type=self.device, dtype=torch.float16):
+                # TODO: get raw predictions and attention weights and ctc inputs from model
+                seq_out, curr_att, ctc_inputs = NotImplementedError
 
-            with torch.autocast(device_type=self.device, dtype=torch.float16, enabled=(self.scaler is not None)):
-                # Forward pass => The model typically uses:
-                #   model.forward(feats, padded_targets=targets_shifted, source_lengths=feat_lengths, target_lengths=transcript_lengths)
-                #   returns seq_out, attn, ctc_inputs
-                seq_out, attn, ctc_inputs = self.model(
-                    padded_sources=feats,
-                    padded_targets=targets_shifted,
-                    source_lengths=feat_lengths,
-                    target_lengths=transcript_lengths
-                )
-                last_batch_attn = attn
+                # Update running_att with the latest attention weights
+                running_att = curr_att
 
-                # Compute CE loss
-                B, T, C = seq_out.shape
-                seq_out_2d = seq_out.view(B * T, C)
-                gold_1d = targets_golden.view(B * T)
-                ce_loss = self.ce_criterion(seq_out_2d, gold_1d)
+                # TODO: Calculate CE loss
+                ce_loss = NotImplementedError
 
-                # Optionally compute CTC
-                ctc_loss = torch.tensor(0.0, device=feats.device)
-                if self.ctc_weight > 0 and ctc_inputs is not None:
-                    # ctc_inputs['log_probs'] => shape (T', B, vocab_size)
-                    # ctc_inputs['lengths'] => shape (B,)
-                    # We must ensure transcripts have no SOS/EOS. Possibly remove them.
-                    # If your transcripts have shape (B, Ttext) with an eos at end, remove it:
-                    # (Alternatively your model might do so already.)
-                    # For demonstration, we'll assume golden excludes final EOS:
-                    ctc_log_probs = ctc_inputs['log_probs']  # (T', B, C)
-                    ctc_lengths = ctc_inputs['lengths']  # (B,)
 
-                    # The target for ctc is basically the original transcript (without SOS shift)
-                    # If your 'golden' includes an eos token, remove it
-                    # We also need the target lengths for ctc => transcript_lengths minus 1 if you appended EOS
-                    # For simplicity, let's assume it is already correct
-                    ctc_loss = self.ctc_criterion(
-                        ctc_log_probs,  # (T', B, C)
-                        targets_golden,  # shape (B, Ttext) flattened?
-                        ctc_lengths,
-                        transcript_lengths
-                    )
+                # TODO: Calculate CTC loss if needed
+                if self.ctc_weight > 0:
+                    ctc_loss = NotImplementedError
+                    loss = ce_loss + self.ctc_weight * ctc_loss
+                else:
+                    ctc_loss = torch.tensor(0.0)
+                    loss = ce_loss
 
-                # Combine
-                loss = ce_loss + self.ctc_weight * ctc_loss
-
-            # Weighted average for logging
+            # Calculate metrics
             batch_tokens = transcript_lengths.sum().item()
             total_tokens += batch_tokens
             running_ce_loss += ce_loss.item() * batch_tokens
@@ -129,27 +132,18 @@ class ASRTrainer(BaseTrainer):
                 running_ctc_loss += ctc_loss.item() * batch_tokens
             running_joint_loss += loss.item() * batch_tokens
 
-            # Divide for gradient accumulation
+            # Normalize loss by accumulation steps
             loss = loss / self.config['training']['gradient_accumulation_steps']
 
-            # Backprop
-            if self.scaler is not None:
-                self.scaler.scale(loss).backward()
-            else:
-                loss.backward()
+            # TODO: Backpropagate the loss
+            self.scaler = NotImplementedError
 
-            # Step if needed
+            # Only update weights after accumulating enough gradients
             if (i + 1) % self.config['training']['gradient_accumulation_steps'] == 0:
-                if self.scaler is not None:
-                    self.scaler.step(self.optimizer)
-                    if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                        self.scheduler.step()
-                    self.scaler.update()
-                else:
-                    self.optimizer.step()
-                    if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                        self.scheduler.step()
-
+                self.scaler.step(self.optimizer)
+                if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step()
+                self.scaler.update()
                 self.optimizer.zero_grad()
 
             # Update progress bar
@@ -163,353 +157,699 @@ class ASRTrainer(BaseTrainer):
                 ctc_loss=f"{avg_ctc_loss:.4f}",
                 joint_loss=f"{avg_joint_loss:.4f}",
                 perplexity=f"{perplexity:.4f}",
-                acc_step=f"{(i % self.config['training']['gradient_accumulation_steps']) + 1}/"
-                         f"{self.config['training']['gradient_accumulation_steps']}"
+                acc_step=f"{(i % self.config['training']['gradient_accumulation_steps']) + 1}/{self.config['training']['gradient_accumulation_steps']}"
             )
             batch_bar.update()
 
-            # Cleanup
+            # Clean up
             del feats, targets_shifted, targets_golden, feat_lengths, transcript_lengths
-            del seq_out, ctc_inputs, loss
+            del seq_out, curr_att, ctc_inputs, loss
             torch.cuda.empty_cache()
 
-        # leftover accumulation
-        remainder = len(dataloader) % self.config['training']['gradient_accumulation_steps']
-        if remainder != 0:
-            if self.scaler is not None:
-                self.scaler.step(self.optimizer)
-                if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step()
-                self.scaler.update()
-            else:
-                self.optimizer.step()
-                if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step()
+        # Handle remaining gradients
+        if (len(dataloader) % self.config['training']['gradient_accumulation_steps']) != 0:
+            self.scaler.step(self.optimizer)
+            if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                self.scheduler.step()
+            self.scaler.update()
             self.optimizer.zero_grad()
 
+        # Compute final metrics
         avg_ce_loss = running_ce_loss / total_tokens
         avg_ctc_loss = running_ctc_loss / total_tokens
         avg_joint_loss = running_joint_loss / total_tokens
         avg_perplexity_token = torch.exp(torch.tensor(avg_ce_loss))
-        # char-level perplexity
         avg_perplexity_char = torch.exp(torch.tensor(avg_ce_loss / dataloader.dataset.get_avg_chars_per_token()))
         batch_bar.close()
 
-        metrics = {
+        return {
             'ce_loss': avg_ce_loss,
             'ctc_loss': avg_ctc_loss,
             'joint_loss': avg_joint_loss,
             'perplexity_token': avg_perplexity_token.item(),
             'perplexity_char': avg_perplexity_char.item()
-        }
-
-        return metrics, last_batch_attn
-
-    def recognize(self, dataloader, recognition_config: Optional[Dict[str, Any]] = None,
-                  config_name: Optional[str] = None, max_length: Optional[int] = None) -> List[Dict[str, Any]]:
-        """
-        Evaluate the model by generating transcriptions from audio features.
-        If references exist, store them too.
-        """
-        if max_length is None and not hasattr(self, 'text_max_len'):
-            raise ValueError("text_max_len is not set. Please run training loop first or provide max_length")
-
-        if recognition_config is None:
-            # Default config -> greedy
-            recognition_config = {
-                'num_batches': None,
-                'beam_width': 1,
-                'temperature': 1.0,
-                'repeat_penalty': 1.0,
-                'lm_weight': 0.0,
-                'lm_model': None
-            }
-            config_name = "greedy"
-
-        # if shallow fusion LM is given
-        if recognition_config.get('lm_model') is not None:
-            recognition_config['lm_model'].eval()
-            recognition_config['lm_model'].to(self.device)
-
-        # We'll use the model in eval mode
-        self.model.eval()
-        results = []
-
-        # Create progress bar
-        desc_str = f"[Recognizing ASR]: {config_name}" if config_name else "[Recognizing ASR]"
-        batch_bar = tqdm(total=len(dataloader), dynamic_ncols=True, leave=False, position=0, desc=desc_str)
-
-        # We'll create a SequenceGenerator with a dynamic score_fn
-        generator = SequenceGenerator(
-            score_fn=None,  # We'll define it for each batch
-            tokenizer=self.tokenizer,
-            max_length=max_length if max_length is not None else self.text_max_len,
-            device=self.device
-        )
-
-        with torch.inference_mode():
-            for i, batch in enumerate(dataloader):
-                feats, _, targets_golden, feat_lengths, _ = batch
-                feats = feats.to(self.device)
-                feat_lengths = feat_lengths.to(self.device)
-                if targets_golden is not None:
-                    targets_golden = targets_golden.to(self.device)
-
-                # Encode
-                # The model typically does => self.model.encode(...)
-                # returns => encoder_output, pad_mask_src, attn, ctc_inputs
-                encoder_output, pad_mask_src, _, _ = self.model.encode(
-                    padded_sources=feats,
-                    source_lengths=feat_lengths
-                )
-
-                # define scoring function
-                def get_score(prompts):
-                    asr_logits = self.model.score(prompts, encoder_output, pad_mask_src)
-                    if recognition_config['lm_model'] is not None and recognition_config['lm_weight'] > 0.0:
-                        lm_logits = recognition_config['lm_model'].score(prompts)
-                        return asr_logits + recognition_config['lm_weight'] * lm_logits
-                    return asr_logits
-
-                generator.score_fn = get_score
-
-                # build initial prompts
-                B = feats.size(0)
-                # We'll create batch of shape (B, 1) each with [SOS]
-                sos_tok = torch.full((B, 1), fill_value=self.tokenizer.sos_id, device=self.device, dtype=torch.long)
-
-                # decode
-                if recognition_config['beam_width'] > 1:
-                    # beam search
-                    seqs, scores = generator.generate_beam(
-                        x=sos_tok,
-                        beam_width=recognition_config['beam_width'],
-                        temperature=recognition_config['temperature'],
-                        repeat_penalty=recognition_config['repeat_penalty']
-                    )
-                    # beam => shape (B, beam_width, T)
-                    # pick best beam => [0]
-                    seqs = seqs[:, 0, :]
-                    scores = scores[:, 0]
-                else:
-                    # greedy
-                    seqs, scores = generator.generate_greedy(
-                        x=sos_tok,
-                        temperature=recognition_config['temperature'],
-                        repeat_penalty=recognition_config['repeat_penalty']
-                    )
-
-                # post-process => remove everything after EOS
-                post_processed_preds = generator.post_process_sequence(seqs, self.tokenizer)
-
-                # store results
-                if targets_golden is not None:
-                    # post process references too
-                    post_processed_refs = generator.post_process_sequence(targets_golden, self.tokenizer)
-                    for j, (pred, ref) in enumerate(zip(post_processed_preds, post_processed_refs)):
-                        results.append({
-                            'target': self.tokenizer.decode(ref.tolist(), skip_special_tokens=True),
-                            'generated': self.tokenizer.decode(pred.tolist(), skip_special_tokens=True),
-                            'score': scores[j].item() if isinstance(scores[j], torch.Tensor) else scores[j]
-                        })
-                else:
-                    # no references
-                    for j, pred in enumerate(post_processed_preds):
-                        results.append({
-                            'generated': self.tokenizer.decode(pred.tolist(), skip_special_tokens=True),
-                            'score': scores[j].item() if isinstance(scores[j], torch.Tensor) else scores[j]
-                        })
-
-                batch_bar.update()
-
-                # if user-provided 'num_batches' => stop early
-                if recognition_config['num_batches'] is not None:
-                    if i >= recognition_config['num_batches'] - 1:
-                        break
-
-                del feats, feat_lengths, encoder_output, pad_mask_src, seqs, scores
-                torch.cuda.empty_cache()
-
-        batch_bar.close()
-        return results
+        }, running_att
 
     def _validate_epoch(self, dataloader):
         """
-        Validate for one epoch => we do recognition and compute CER/WER, etc.
+        Validate for one epoch.
+
+        Args:
+            dataloader: DataLoader for validation data
+        Returns:
+            Tuple[Dict[str, float], List[Dict[str, Any]]]: Validation metrics and recognition results
         """
-        self.model.eval()
-        # Let's do an inference => produce predicted transcriptions
-        val_config = {
-            'num_batches': None,  # or small if you want partial
-            'beam_width': 1,  # let's do greedy by default
-            'temperature': 1.0,
-            'repeat_penalty': 1.0,
-            'lm_weight': 0.0,
-            'lm_model': None
-        }
-        results = self.recognize(dataloader, recognition_config=val_config, config_name="val-greedy")
+        # TODO: In-fill the _validate_epoch method
+        raise NotImplementedError # Remove once implemented
 
-        # Extract references/hypotheses
-        references = []
-        hypotheses = []
-        for r in results:
-            if 'target' in r:
-                references.append(r['target'])
-            else:
-                references.append("")
-            hypotheses.append(r['generated'])
+        # TODO: Call recognize
+        results = NotImplementedError
 
-        # calculate metrics with e.g. torchmetrics
-        wer_metric = tmt.WordErrorRate()
-        cer_metric = tmt.CharErrorRate()
-        wdist_metric = tmt.EditDistance(reduction='mean')  # for word-level distance
+        # TODO: Extract references and hypotheses from results
+        references = NotImplementedError
+        hypotheses = NotImplementedError
 
-        # measure
-        wer_val = wer_metric(hypotheses, references).item() * 100
-        cer_val = cer_metric(hypotheses, references).item() * 100
-        wdist = wdist_metric(hypotheses, references).item()
+        # Calculate metrics on full batch
+        metrics = self._calculate_asr_metrics(references, hypotheses)
 
-        metrics = {
-            'wer': wer_val,
-            'cer': cer_val,
-            'word_dist': wdist
-        }
         return metrics, results
 
     def train(self, train_dataloader, val_dataloader, epochs: int):
         """
-        Full training loop for ASR.
+        Full training loop for ASR training.
+
+        Args:
+            train_dataloader: DataLoader for training data
+            val_dataloader: DataLoader for validation data
+            epochs: int, number of epochs to train
         """
         if self.scheduler is None:
-            raise ValueError("Scheduler not initialized!")
+            raise ValueError("Scheduler is not initialized, initialize it first!")
+
         if self.optimizer is None:
-            raise ValueError("Optimizer not initialized!")
+            raise ValueError("Optimizer is not initialized, initialize it first!")
 
-        # We'll pick a max transcript length for generation
-        # E.g. from the dataset
-        self.text_max_len = max(
-            getattr(train_dataloader.dataset, 'text_max_len', 200),
-            getattr(val_dataloader.dataset, 'text_max_len', 200)
-        )
+        # TODO: In-fill the train method
+        raise NotImplementedError # Remove once implemented
 
-        best_val_cer = float('inf')
+        # Set max transcript length
+        self.text_max_len = max(val_dataloader.dataset.text_max_len, train_dataloader.dataset.text_max_len)
+
+        # Training loop
+        best_val_loss = float('inf')
+        best_val_wer  = float('inf')
+        best_val_cer  = float('inf')
+        best_val_dist = float('inf')
 
         for epoch in range(self.current_epoch, self.current_epoch + epochs):
-            print(f"\n=== [Epoch {epoch}] Training ===")
-            train_metrics, train_attn = self._train_epoch(train_dataloader)
-            print(f"Train metrics: {train_metrics}")
 
-            print(f"\n=== [Epoch {epoch}] Validating ===")
-            val_metrics, val_results = self._validate_epoch(val_dataloader)
-            print(f"Val metrics: {val_metrics}")
+            # TODO: Train for one epoch
+            train_metrics, train_attn = NotImplementedError, NotImplementedError
 
-            # Step scheduler if it's a reduce-lr type
+            # TODO: Validate
+            val_metrics, val_results = NotImplementedError, NotImplementedError
+
+            # Step ReduceLROnPlateau scheduler with validation loss
             if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 self.scheduler.step(val_metrics['cer'])
 
-            # Log everything
+            # Log metrics
             metrics = {
                 'train': train_metrics,
                 'val': val_metrics
             }
             self._log_metrics(metrics, epoch)
 
-            # We can store attention from train for debugging
-            if train_attn:
-                attn_keys = list(train_attn.keys())
-                if attn_keys:
-                    # e.g. pick the first or last for plotting
-                    key = attn_keys[0]
-                    # self._save_attention_plot(train_attn[key][0], epoch, "train_self")
+            # Save attention plots
+            train_attn_keys = list(train_attn.keys())
+            if train_attn_keys:
+                # Get the first self-attention and cross-attention layers
+                decoder_self_keys  = [k for k in train_attn_keys if 'dec_self' in k]
+                decoder_cross_keys = [k for k in train_attn_keys if 'dec_cross' in k]
 
-            # Save some recognized text
+                if decoder_self_keys:
+                    # Plot first layer (layer1) if available
+                    first_self_key = decoder_self_keys[0]
+                    if first_self_key in train_attn:
+                        self._save_attention_plot(train_attn[first_self_key][0], epoch, "decoder_self")
+
+                if decoder_cross_keys:
+                    # Plot last layer if available
+                    last_cross_key = decoder_cross_keys[-1]
+                    if last_cross_key in train_attn:
+                        self._save_attention_plot(train_attn[last_cross_key][0], epoch, "decoder_cross")
+
+            # Save generated text
             self._save_generated_text(val_results, f'val_epoch_{epoch}')
 
-            # Save checkpoint
+            # Save checkpoints
             self.save_checkpoint('checkpoint-last-epoch-model.pth')
 
-            # Check for best CER
-            cer_val = val_metrics['cer']
-            if cer_val < best_val_cer:
-                best_val_cer = cer_val
-                self.best_metric = cer_val
+            # Check if this is the best model
+            if val_metrics['cer'] < best_val_cer:
+                best_val_cer = val_metrics['cer']
+                self.best_metric = val_metrics['cer']
                 self.save_checkpoint('checkpoint-best-metric-model.pth')
 
             self.current_epoch += 1
 
+
     def evaluate(self, dataloader, max_length: Optional[int] = None) -> Dict[str, Dict[str, float]]:
         """
-        Evaluate on test set. We'll gather all recognition configs, run them, store results
-        as dataframes or metrics.
-        """
-        recognition_configs = self._get_evaluation_recognition_configs()
-        eval_results = {}
+        Evaluate the model on the test set. Sequentially evaluates with each recognition config.
 
-        for config_name, cfg in recognition_configs.items():
-            print(f"Evaluating with {config_name} config")
+        Args:
+            dataloader: DataLoader for test data
+            max_length: Optional[int], maximum length of the generated sequence
+        Returns:
+            Dictionary containing recognition results for each recognition config
+            Each result is a pandas DataFrame with columns 'id' and 'transcription'
+        """
+
+        # Get recognition configs
+        recognition_configs = self._get_evaluation_recognition_configs()
+
+        eval_results = {}
+        # Evaluate with each recognition config
+        for config_name, config in recognition_configs.items():
             try:
-                results = self.recognize(dataloader, cfg, config_name, max_length)
-                # We just store them. If you want metrics, you can do references/hypotheses again
-                # But test might not have references
-                # Let's build a DF
+                print(f"Evaluating with {config_name} config")
+                results = self.recognize(dataloader, config, config_name, max_length)
+                # Calculate metrics on full batch
                 generated = [r['generated'] for r in results]
-                df = pd.DataFrame({
-                    'id': range(len(generated)),
-                    'transcription': generated
-                })
-                eval_results[config_name] = df
+                results_df = pd.DataFrame(
+                    {
+                        'id': range(len(generated)),
+                        'transcription': generated
+                    }
+                )
+                eval_results[config_name] = results_df
                 self._save_generated_text(results, f'test_{config_name}_results')
             except Exception as e:
-                print(f"Error in {config_name} config: {e}")
+                print(f"Error evaluating with {config_name} config: {e}")
                 continue
 
         return eval_results
 
-    def _get_evaluation_recognition_configs(self, lm_model: Optional[DecoderOnlyTransformer] = None,
-                                            lm_weight: float = 0.0):
+    def recognize(self, dataloader, recognition_config: Optional[Dict[str, Any]] = None, config_name: Optional[str] = None, max_length: Optional[int] = None) -> List[Dict[str, Any]]:
         """
-        Return a dictionary of recognition configs for test-time eval.
-        We'll do e.g. greedy, beam10, beam20
+        Evaluate the model by generating transcriptions from audio features.
+
+        Args:
+            dataloader: DataLoader containing the evaluation data
+            recognition_config: Optional dictionary containing recognition parameters:
+                - num_batches: int, number of batches to process
+                - beam_width: int, beam search width
+                - temperature: float, temperature for beam search
+                - repeat_penalty: float, repeat penalty for beam search
+                - lm_weight: float, language model interpolation weight
+                - lm_model: Optional[DecoderOnlyTransformer], language model for shallow fusion
+            max_length: Optional[int], maximum length of the generated sequence
+        Returns:
+            List of dictionaries containing recognition results with generated sequences and scores
+            (targets included if available)
         """
-        common_cfg = {
+        if max_length is None and not hasattr(self, 'text_max_len'):
+            raise ValueError("text_max_len is not set. Please run training loop first or provide a max_length")
+
+        # TODO: In-fill the recognize method
+        raise NotImplementedError # Remove once implemented
+
+        if recognition_config is None:
+            # Default config (greedy search)
+            recognition_config = {
+                'num_batches': 5,
+                'beam_width': 1,
+                'temperature': 1.0,
+                'repeat_penalty': 1.0,
+                'lm_weight': 0.0,
+                'lm_model': None
+            }
+            config_name = 'greedy'
+
+        if recognition_config.get('lm_model') is not None:
+            recognition_config['lm_model'].eval()
+            recognition_config['lm_model'].to(self.device)
+
+        # Initialize sequence generator
+        generator = SequenceGenerator(
+            score_fn=None,  # Will be set for each batch
+            tokenizer=self.tokenizer,
+            max_length=max_length if max_length is not None else self.text_max_len,
+            device=self.device
+        )
+
+        # Initialize variables
+        self.model.eval()
+        batch_bar = tqdm(total=len(dataloader), dynamic_ncols=True, leave=False, position=0, desc=f"[Recognizing ASR] : {config_name}")
+        results = []
+
+        # Run inference
+        with torch.inference_mode():
+            for i, batch in enumerate(dataloader):
+                # TODO: Unpack batch and move to device
+                # TODO: Handle both cases where targets may or may not be None (val set v. test set)
+                feats, _, targets_golden, feat_lengths, _ = batch
+
+                # TODO: Encode speech features to hidden states
+                encoder_output, pad_mask_src, _, _ = NotImplementedError, NotImplementedError, NotImplementedError, NotImplementedError
+
+                # Define scoring function for this batch
+                def get_score(x):
+                    asr_logits = self.model.score(x, encoder_output, pad_mask_src)
+                    if recognition_config.get('lm_model') is not None:
+                        lm_logits = recognition_config['lm_model'].score(x)
+                        return asr_logits + recognition_config['lm_weight'] * lm_logits
+                    return asr_logits
+
+                # Set score function of generator
+                generator.score_fn = get_score
+
+                # TODO: Initialize prompts as a batch of SOS tokens
+                batch_size = feats.size(0)
+                prompts = NotImplementedError
+
+                # TODO: Generate sequences
+                if recognition_config['beam_width'] > 1:
+                    # TODO: If you have implemented beam search, generate sequences using beam search
+                    seqs, scores = NotImplementedError, NotImplementedError
+                    raise NotImplementedError # Remove if you implemented the beam search method
+                    # Pick best beam
+                    seqs = seqs[:, 0, :]
+                    scores = scores[:, 0]
+                else:
+                    # TODO: Generate sequences using greedy search
+                    seqs, scores = NotImplementedError, NotImplementedError
+                    raise NotImplementedError # Remove if you implemented the greedy search method
+
+                # Clean up
+                del feats, feat_lengths, encoder_output, pad_mask_src, prompts
+                torch.cuda.empty_cache()
+
+                # Post process sequences
+                post_processed_preds = generator.post_process_sequence(seqs, self.tokenizer)
+
+                # Store results as a list of dictionaries with target and generated sequences and scores
+                if targets_golden is not None:
+                    post_processed_targets = generator.post_process_sequence(targets_golden, self.tokenizer)
+                    for j, (pred, target) in enumerate(zip(post_processed_preds, post_processed_targets)):
+                        results.append({
+                            'target': self.tokenizer.decode(target.tolist(), skip_special_tokens=True),
+                            'generated': self.tokenizer.decode(pred.tolist(), skip_special_tokens=True),
+                            'score': scores[j].item()
+                        })
+                else:
+                    for j, pred in enumerate(post_processed_preds):
+                        results.append({
+                            'generated': self.tokenizer.decode(pred.tolist(), skip_special_tokens=True),
+                            'score': scores[j].item()
+                        })
+
+                batch_bar.update()
+
+                if recognition_config['num_batches'] is not None and i >= recognition_config['num_batches'] - 1:
+                    break
+
+            batch_bar.close()
+            return results
+
+    def _get_evaluation_recognition_configs(self, lm_model: Optional[DecoderOnlyTransformer] = None, lm_weight: float = 0.0) -> Dict[str, Dict[str, Any]]:
+        """
+        Get a list of recognition configurations for seqential evaluation.
+
+        Returns:
+            Dictionary containing recognition configurations
+        """
+
+        common_config = {
             'num_batches': None,
             'temperature': 1.0,
             'repeat_penalty': 1.0,
             'lm_weight': lm_weight,
             'lm_model': lm_model
         }
-        beam10_cfg = common_cfg.copy()
-        beam10_cfg.update({
-            'beam_width': 10
+        greedy_config = common_config.copy()
+        greedy_config.update({
+            'beam_width': 1,
         })
-        beam20_cfg = common_cfg.copy()
-        beam20_cfg.update({
-            'beam_width': 20
+
+        beam_10_config = common_config.copy()
+        beam_10_config.update({
+            'beam_width': 10,
         })
-        greedy_cfg = common_cfg.copy()
-        greedy_cfg.update({
-            'beam_width': 1
+
+        beam_20_config = common_config.copy()
+        beam_20_config.update({
+            'beam_width': 20,
         })
+
         return {
-            'greedy': greedy_cfg,
-            'beam_10': beam10_cfg,
-            'beam_20': beam20_cfg
+            'greedy': greedy_config,
+            'beam_10': beam_10_config,
+            'beam_20': beam_20_config
         }
 
-    def _calculate_asr_metrics(self, references, hypotheses):
+    def _calculate_asr_metrics(self, references: Union[str, List[str]], hypotheses: Union[str, List[str]]) -> Tuple[float, float, float]:
         """
-        Calculate WER, CER, word_edit_distance
-        references, hypotheses => lists of strings
-        """
-        wer_metric = tmt.WordErrorRate()  # returns fraction
-        cer_metric = tmt.CharErrorRate()  # fraction
-        wdist_metric = tmt.EditDistance(reduction='mean')
+        Calculate Levenshtein distance, WER, CER for strings or lists of strings.
 
-        wer_val = wer_metric(hypotheses, references).item() * 100
-        cer_val = cer_metric(hypotheses, references).item() * 100
-        wdist = wdist_metric(hypotheses, references).item()
+        Args:
+            references: Reference string(s)
+            hypotheses: Hypothesis string(s)
+        Returns:
+            Tuple of (word_dist, wer, cer)
+        """
+        # Initialize metrics
+        wer_metric = tmt.WordErrorRate()
+        word_edit_metric = tmt.EditDistance(reduction='mean')
+        cer_metric = tmt.CharErrorRate()
+
+        # Calculate metrics
+        word_dist = word_edit_metric(hypotheses, references)
+        wer = wer_metric(hypotheses, references)  # torchmetrics returns as decimal
+        cer = cer_metric(hypotheses, references)  # torchmetrics returns as decimal
+
         return {
-            'wer': wer_val,
-            'cer': cer_val,
-            'word_dist': wdist
+            'word_dist': word_dist.item(),
+            'wer': wer.item() * 100,
+            'cer': cer.item() * 100
         }
+
+# -------------------------------------------------------------------------------------------------
+
+class ProgressiveTrainer(ASRTrainer):
+    """
+    Progressive Trainer class that implements curriculum learning for ASR training.
+
+    This trainer extends ASRTrainer to implement:
+    1. Stage-based training with increasing model complexity
+    2. Gradual unfreezing of model layers
+    3. Dynamic data subsetting
+    4. Smooth transition to full model training
+
+    Implementation Tasks:
+    - Store original model layers in __init__
+    - Configure model for each stage in configure_stage
+    - Implement progressive training loop in progressive_train
+    - Handle transition to full training in transition_to_full_training
+    - Create data subsets in get_subset_dataloader
+
+    Implementation Notes:
+    1. For __init__:
+        - Store original encoder and decoder layers
+        - Initialize stage counter
+
+    2. For configure_stage:
+        - Update dropout and label smoothing
+        - Activate specified encoder and decoder layers
+        - Handle layer freezing based on configuration
+        - Print detailed configuration information
+
+    3. For progressive_train:
+        - Configure model for each stage
+        - Create appropriate data subset
+        - Train using parent class methods
+
+    4. For transition_to_full_training:
+        - Restore all model layers
+        - Reset loss function parameters
+        - Unfreeze all parameters
+        - Reset best metrics
+
+    5. For get_subset_dataloader:
+        - Create subset while preserving dataset attributes
+        - Maintain collate function and other dataloader settings
+
+    # -------------------------------------------------------------------------------------------------
+    ##### Stage Configuration
+
+    Each stage is defined as a dictionary with the following parameters:
+    ```python
+    {
+        'name': str,                        # Name of the training stage
+        'epochs': int,                      # Number of epochs to train in this stage
+        'encoder_active_layers': List[int], # Which encoder layers to use
+        'decoder_active_layers': List[int], # Which decoder layers to use
+        'encoder_freeze': List[bool],       # Whether to freeze each encoder layer
+        'decoder_freeze': List[bool],       # Whether to freeze each decoder layer
+        'dropout': float,                   # Dropout rate for this stage
+        'label_smoothing': float,           # Label smoothing value
+        'data_subset': float                # Fraction of training data to use (0.0-1.0)
+    }
+    ```
+    #### Example
+    It is best understood by an example. Here is a breakdown of the stages defined below for a model with 6 encoder and 6 decoder layers:
+
+    stages = [
+                {
+                    # `Initial (1 layers)`:
+                    # This stage starts with a model with only 1 encoder and 1 decoder layer.
+                    # No freezing or regularization is applied.
+                    # It uses 20% of the training data.
+                    'name': 'Initial (1 Encoder + 1 Decoder layers)',
+                    'epochs': 5,
+                    'encoder_active_layers': list(range(1)),
+                    'decoder_active_layers': list(range(1)),
+                    'encoder_freeze': [False],
+                    'decoder_freeze': [False],
+                    'dropout': 0.0,
+                    'label_smoothing': 0.0,
+                    'data_subset': 0.2
+                },
+                {
+                    # `2 layers`:
+                    # This stage increases the number of layers to 2 for both the encoder and decoder.
+                    # The previous layer (encoder layer 1 and decoder layer 1) are frozen.
+                    # No regularization is applied.
+                    # It uses 20% of the training data.
+                    'name': '2 Encoder + 2 Decoder layers',
+                    'epochs': 5,
+                    'encoder_active_layers': list(range(2)),
+                    'decoder_active_layers': list(range(2)),
+                    'encoder_freeze': [True, False],
+                    'decoder_freeze': [True, False],
+                    'dropout': 0.0,
+                    'label_smoothing': 0.0,
+                    'data_subset': 0.2
+                },
+                {
+                    # `4 layers`:
+                    # This stage increases the number of layers to 4 for both the encoder and decoder.
+                    # The previous layers (encoder layers 1 and 2 and decoder layers 1 and 2) are frozen.
+                    # Dropout is set to 0.05 and label smoothing is set to 0.0.
+                    # It uses 20% of the training data.
+                    'name': '4 Encoder + 4 Decoder layers',
+                    'epochs': 5,
+                    'encoder_active_layers': list(range(4)),
+                    'decoder_active_layers': list(range(4)),
+                    'encoder_freeze': [True, True, False, False],
+                    'decoder_freeze': [True, True, False, False],
+                    'dropout': 0.05,
+                    'label_smoothing': 0.0,
+                    'data_subset': 0.2
+                },
+                {
+                    # `All 6 layers`:
+                    # This stage uses all 6 encoder and 6 decoder layers.
+                    # The 4 previous layers are frozen and the last 2 layers are trained.
+                    # Dropout is set to 0.1 and label smoothing is set to 0.0.
+                    # It uses 20% of the training data.
+                    'name': '6 Encoder + 6 Decoder layers',
+                    'epochs': 5,
+                    'encoder_active_layers': list(range(6)),
+                    'decoder_active_layers': list(range(6)),
+                    'encoder_freeze': [True, True, True, True, False, False],
+                    'decoder_freeze': [True, True, True, True, False, False],
+                    'dropout': 0.1,
+                    'label_smoothing': 0.0,
+                    'data_subset': 0.2
+                },
+                {
+                    # `Final (with label smoothing)`:
+                    # This stage uses all 6 encoder and 6 decoder layers.
+                    # All layers are unfrozen and trained.
+                    # Dropout is set to 0.1 and label smoothing is set to 0.1.
+                    # It uses 20% of the training data.
+                    'name': 'Final (with label smoothing)',
+                    'epochs': 5,
+                    'encoder_active_layers': list(range(6)),
+                    'decoder_active_layers': list(range(6)),
+                    'encoder_freeze': [False, False, False, False, False, False],
+                    'decoder_freeze': [False, False, False, False, False, False],
+                    'dropout': 0.1,
+                    'label_smoothing': 0.1,
+                    'data_subset': 0.2
+                }
+            ]
+
+    ##### Important Notes
+    - Ensure `encoder_freeze` and `decoder_freeze` lists match the length of their respective `active_layers`
+    - `data_subset` should be between 0 and 1
+    - Stage transitions are handled automatically by the trainer
+    - The same optimizer and scheduler are used for all stages so keep that in mind while setting the learning rates and other parameters
+    """
+    def __init__(self, model, tokenizer, config, run_name, config_file, device=None):
+        super().__init__(model, tokenizer, config, run_name, config_file, device)
+        self.current_stage = 0
+        # Store original layer states
+        self.all_encoder_layers = list(self.model.enc_layers)
+        self.all_decoder_layers = list(self.model.dec_layers)
+
+
+    def configure_stage(self, stage_config):
+        """Configure model for current training stage"""
+        # Create a pretty header
+        print("\n" + "="*80)
+        print(f"Starting Stage: {stage_config['name']}".center(80))
+        print("="*80)
+
+        # Print key configuration details
+        print(f"\nConfiguration Details:")
+        print(f"├── Data Subset: {stage_config['data_subset']*100:.1f}% of training data")
+        print(f"├── Training Epochs: {stage_config['epochs']}")
+        print(f"├── Dropout: {stage_config['dropout']}")
+        print(f"├── Label Smoothing: {stage_config['label_smoothing']}")
+
+        # Update dropout and label smoothing
+        self.model.dropout.p = stage_config['dropout']
+        self.ce_criterion = nn.CrossEntropyLoss(
+            ignore_index=self.tokenizer.pad_id,
+            label_smoothing=stage_config['label_smoothing']
+        )
+
+        # Get freeze configurations
+        encoder_freeze = stage_config.get('encoder_freeze', [])
+        decoder_freeze = stage_config.get('decoder_freeze', [])
+
+        # Activate and configure encoder layers
+        encoder_active_layers = stage_config['encoder_active_layers']
+        if encoder_freeze and len(encoder_freeze) != len(encoder_active_layers):
+            raise ValueError(f"Encoder freeze list length ({len(encoder_freeze)}) must match number of active encoder layers ({len(encoder_active_layers)})")
+
+        # Set the active encoder layers of the model
+        self.model.enc_layers = nn.ModuleList([
+            self.all_encoder_layers[i] for i in encoder_active_layers
+        ])
+        self.model.num_encoder_layers = len(encoder_active_layers)
+
+        # Activate and configure decoder layers
+        decoder_active_layers = stage_config['decoder_active_layers']
+        if decoder_freeze and len(decoder_freeze) != len(decoder_active_layers):
+            raise ValueError(f"Decoder freeze list length ({len(decoder_freeze)}) must match number of active decoder layers ({len(decoder_active_layers)})")
+
+        # Set the active decoder layers of the model
+        self.model.dec_layers = nn.ModuleList([
+            self.all_decoder_layers[i] for i in decoder_active_layers
+        ])
+        self.model.num_decoder_layers = len(decoder_active_layers)
+
+        # Handle layer freezing
+        frozen_count = 0
+        trainable_count = 0
+
+        # Configure encoder layers freezing
+        print("├── Encoder Layers:")
+        for idx, layer in enumerate(self.model.enc_layers):
+            should_freeze = encoder_freeze[idx]
+            for param in layer.parameters():
+                param.requires_grad = not should_freeze
+                if should_freeze:
+                    frozen_count += param.numel()
+                else:
+                    trainable_count += param.numel()
+            print(f"│   ├── Layer {encoder_active_layers[idx]}: {'Frozen' if should_freeze else 'Trainable'}")
+
+        # Configure decoder layers
+        print("├── Decoder Layers:")
+        for idx, layer in enumerate(self.model.dec_layers):
+            should_freeze = decoder_freeze[idx]
+            for param in layer.parameters():
+                param.requires_grad = not should_freeze
+                if should_freeze:
+                    frozen_count += param.numel()
+                else:
+                    trainable_count += param.numel()
+            print(f"│   ├── Layer {decoder_active_layers[idx]}: {'Frozen' if should_freeze else 'Trainable'}")
+
+        print(f"├── Frozen Parameters: {frozen_count:,}")
+        print(f"└── Trainable Parameters: {trainable_count:,}")
+
+
+    def progressive_train(self, train_dataloader, val_dataloader, stages: List[Dict[str, Any]]):
+        """
+        Progressive training through stages
+        Each stage configuration is defined as a dictionary with the following parameters:
+
+        Args:
+            train_dataloader: DataLoader for training data
+            val_dataloader: DataLoader for validation data
+            stages: List of dictionaries containing stage configuration
+        """
+        # Train through stages
+        for stage_idx, stage_config in enumerate(stages):
+            self.current_stage = stage_idx
+            self.configure_stage(stage_config)
+            # Get subset of train_dataloader
+            subset_train_dataloader = self.get_subset_dataloader(train_dataloader, stage_config['data_subset'])
+            super().train(subset_train_dataloader, val_dataloader, epochs=stage_config['epochs'])
+
+    def transition_to_full_training(self):
+        """Transition from progressive training to full training"""
+        print("\n=== Transitioning to Full Training ===")
+
+        # Restore all layers
+        self.model.enc_layers = nn.ModuleList(self.all_encoder_layers)
+        self.model.dec_layers = nn.ModuleList(self.all_decoder_layers)
+        self.model.num_encoder_layers = len(self.all_encoder_layers)
+        self.model.num_decoder_layers = len(self.all_decoder_layers)
+
+        # Restore CrossEntropyLoss
+        self.ce_criterion = nn.CrossEntropyLoss(
+            ignore_index=self.tokenizer.pad_id,
+            label_smoothing=self.config['loss']['label_smoothing']
+        )
+
+        # Unfreeze all parameters
+        unfrozen_count = 0
+        for param in self.model.parameters():
+            param.requires_grad = True
+            unfrozen_count += param.numel()
+        print(f"├── Total Unfrozen Parameters: {unfrozen_count:,}")
+
+        # Reset best metrics for new training phase
+        self.best_metric = float('inf')
+
+
+    def train(self, train_dataloader, val_dataloader, epochs):
+        """
+        Run full training phase.
+        It is recommended to set the optimizer and scheduler explicitly before calling this function.
+        like this:
+        cls.optimizer = create_optimizer(self.model, self.config['optimizer'])
+        cls.scheduler = create_scheduler(cls.optimizer, cls.config['scheduler'], train_dataloader)
+        cls.progressive_train(train_dataloader, val_dataloader, stages)
+        """
+        self.transition_to_full_training()
+        super().train(train_dataloader, val_dataloader, epochs=epochs)
+
+
+    def get_subset_dataloader(self, dataloader, subset_fraction):
+        """
+        Creates a new DataLoader with a subset of the original data while preserving dataset attributes.
+
+        Args:
+            dataloader: Original DataLoader
+            subset_fraction: Float between 0 and 1 indicating what fraction of data to keep
+
+        Returns:
+            New DataLoader containing only the subset of data
+        """
+        # Calculate how many samples we want to keep
+        dataset = dataloader.dataset
+        total_samples = len(dataset)
+        subset_size = int(total_samples * subset_fraction)
+
+        # Create random indices for the subset
+        indices = torch.randperm(total_samples)[:subset_size]
+
+        # Create a Subset dataset
+        subset_dataset = Subset(dataset, indices)
+
+        # Add necessary attributes from original dataset to subset
+        subset_dataset.text_max_len = dataset.text_max_len
+        subset_dataset.feat_max_len = dataset.feat_max_len
+        subset_dataset.get_avg_chars_per_token = dataset.get_avg_chars_per_token
+
+        # Create new DataLoader with same configuration as original
+        subset_loader = torch.utils.data.DataLoader(
+            subset_dataset,
+            batch_size=self.config['data']['batch_size'],
+            shuffle=True,
+            num_workers=self.config['data']['NUM_WORKERS'],
+            collate_fn=dataset.collate_fn,
+            pin_memory=True
+        )
+
+        return subset_loader
+
+
