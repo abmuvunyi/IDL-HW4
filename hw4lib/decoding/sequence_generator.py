@@ -224,10 +224,16 @@ class SequenceGenerator:
                 break
 
             # (B, beam_w, seq_len) => we flatten beams for scoring => (B*beam_w, seq_len)
-            flat_seqs = sequences.view(batch_size * beam_width, -1)
+            # flat_seqs = sequences.view(batch_size * beam_width, -1)
 
             # 1) get next-token logits => shape (B*beam_w, vocab_size)
-            logits = self.score_fn(flat_seqs)
+            # logits = self.score_fn(flat_seqs)
+            # score_fn must be called separately per batch item, each with (beam_width, seq_len)
+            logits = []
+            for b in range(batch_size):
+                logits_b = self.score_fn(sequences[b])  # shape: (beam_width, vocab_size)
+                logits.append(logits_b.unsqueeze(0))
+            logits = torch.cat(logits, dim=0)  # shape: (batch_size, beam_width, vocab_size)
 
             # 2) apply repetition penalty
             logits = self._apply_repeat_penalty(
