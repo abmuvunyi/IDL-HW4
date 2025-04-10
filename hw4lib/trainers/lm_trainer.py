@@ -394,3 +394,50 @@ class LMTrainer(BaseTrainer):
             })
 
         return results
+
+    def _get_evaluation_generation_configs(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get a list of generation configurations for evaluation.
+
+        Returns:
+            Dictionary containing generation configurations
+        """
+        common_config = {
+            'num_samples': 50,
+            'prompt_length': 10,
+            'seed': 11785,
+            'max_length': self.model.max_len,
+        }
+
+        greedy_config = common_config.copy()
+        greedy_config.update({
+            'temperature': 1.0,
+            'beam_width': 1,
+            'repeat_penalty': 1.0,
+            'top_k': 0,
+            'top_p': 0.0
+        })
+
+        beam_config = common_config.copy()
+        beam_config.update({
+            'temperature': 1.0,
+            'beam_width': 10,
+            'repeat_penalty': 1.2,
+            'top_k': 0,
+            'top_p': 0.0
+        })
+
+        sample_config = common_config.copy()
+        sample_config.update({
+            'temperature': 1.0,
+            'beam_width': 1,
+            'repeat_penalty': 1.0,
+            'top_k': 10,
+            'top_p': 0.95
+        })
+
+        return {
+            'greedy': greedy_config,
+            'beam': beam_config,
+            'sample': sample_config
+        }
