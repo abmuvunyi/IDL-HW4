@@ -249,7 +249,7 @@ class EncoderDecoderTransformer(nn.Module):
         # (3) Create source embedding for speech
         self.source_embedding = SpeechEmbedding(
             input_dim=input_dim,
-            d_model=d_model,
+            output_dim=d_model,
             time_reduction=time_reduction,
             reduction_method=reduction_method,
             dropout=dropout
