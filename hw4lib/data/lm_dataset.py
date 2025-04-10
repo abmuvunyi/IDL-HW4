@@ -170,3 +170,60 @@ class LMDataset(Dataset):
         )
 
         return padded_shifted, padded_golden, lengths
+
+    def sample_prompts(self, num_samples: int, prompt_length: int, seed: int = None) -> Tuple[
+        torch.LongTensor, List[torch.LongTensor]]:
+        """
+        Sample random prompts of fixed length from the dataset and return their original sequences.
+        DO NOT MODIFY
+
+        Args:
+            num_samples: Number of prompts to sample
+            prompt_length: Exact number of tokens for each prompt
+            seed: Random seed for reproducibility. If None, no seed is set.
+
+        Returns:
+            tuple: (prompts, originals) where:
+                - prompts: torch.LongTensor of tokenized prompts
+                - originals: List of torch.LongTensor containing complete original sequences
+        """
+        # Set random seed if provided
+        if seed is not None:
+            # Save current random state
+            np_state = np.random.get_state()
+            # Set seed for sampling
+            np.random.seed(seed)
+
+        prompts = []
+        originals = []
+        attempts = 0
+        max_attempts = num_samples * 10  # Prevent infinite loops
+
+        while len(prompts) < num_samples and attempts < max_attempts:
+            # Sample random transcript
+            idx = np.random.randint(0, len(self))
+            tokens = self.transcripts_shifted[idx][1:]  # remove sos token
+
+            # Skip if transcript is too short
+            if len(tokens) < prompt_length:
+                attempts += 1
+                continue
+
+            # Get exactly prompt_length tokens
+            prompt_tokens = tokens[:prompt_length]
+
+            # Store prompt and original sequence
+            prompts.append(torch.LongTensor([self.sos_token] + prompt_tokens))
+            originals.append(torch.LongTensor(tokens + [self.eos_token]))
+
+            attempts += 1
+
+        if len(prompts) < num_samples:
+            print(f"Warning: Could only sample {len(prompts)} valid prompts")
+
+        # Restore random state if seed was set
+        if seed is not None:
+            np.random.set_state(np_state)
+
+        # No need for another LongTensor conversion since prompts are already tensors
+        return torch.stack(prompts), originals
