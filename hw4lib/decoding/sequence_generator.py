@@ -308,19 +308,14 @@ class SequenceGenerator:
                 break
 
             # Compute logits for next tokens
-            # next_token_scores = []
-            # for beam_idx in range(beam_width):
-            #     beam_logits = self.score_fn(x[:, beam_idx])
-            #     next_token_scores.append(beam_logits)
-            #
-            # next_token_scores = torch.stack(next_token_scores, dim=1)
+            next_token_scores = []
+            for beam_idx in range(beam_width):
+                beam_logits = self.score_fn(x[:, beam_idx])
+                next_token_scores.append(beam_logits)
 
-            # Only batch_size = 1 is supported for now
-            if batch_size != 1:
-                raise NotImplementedError("Beam search only supports batch_size = 1 in current implementation.")
+            next_token_scores = torch.stack(next_token_scores, dim=1)
 
-            beam_logits = self.score_fn(x[0])  # shape: (beam_width, vocab_size)
-            next_token_scores = beam_logits.unsqueeze(0)  # (1, beam_width, vocab_size)
+
 
             # Apply repeat penalty and temperature
             next_token_scores = apply_repeat_penalty(next_token_scores, x, repeat_penalty)
