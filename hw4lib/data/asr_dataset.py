@@ -128,7 +128,10 @@ class ASRDataset(Dataset):
             if self.partition != "test-clean":
                 text_np = np.load(self.text_files[i], allow_pickle=True)
                 # Convert to string
-                transcript = "".join(list(text_np))
+                if isinstance(text_np, np.ndarray):
+                    transcript = "".join(str(c) for c in text_np)
+                else:
+                    transcript = str(text_np)
                 self.total_chars += len(transcript)
 
                 tokenized = self.tokenizer.encode(transcript)
