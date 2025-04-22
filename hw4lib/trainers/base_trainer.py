@@ -280,6 +280,7 @@ class BaseTrainer(ABC):
         checkpoint_path = self.checkpoint_dir / filename
         checkpoint = {
             'epoch': self.current_epoch,
+            'global_step': self.current_epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
@@ -345,13 +346,24 @@ class BaseTrainer(ABC):
             load_status['scaler'] = False
 
         # Try loading training state
+        # try:
+        #     self.current_epoch = checkpoint['epoch']
+        #     self.best_metric = checkpoint['best_metric']
+        #     self.training_history = checkpoint['training_history']
+        #     load_status['training_state'] = True
+        # except Exception as e:
+        #     print(f"Warning: Failed to load training state: {e}")
+        #     load_status['training_state'] = False
         try:
-            self.current_epoch = checkpoint['epoch']
+            self.current_epoch = checkpoint['epoch']  # e.g. 60
+            self.global_step = checkpoint.get('global_step',
+                                              self.current_epoch)
             self.best_metric = checkpoint['best_metric']
             self.training_history = checkpoint['training_history']
             load_status['training_state'] = True
         except Exception as e:
             print(f"Warning: Failed to load training state: {e}")
+            self.global_step = 0
             load_status['training_state'] = False
 
         # Summarize what was loaded successfully
